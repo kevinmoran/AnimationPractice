@@ -1,0 +1,4 @@
+**/.vscode/ipch/
+.vs/
+build/
+build-release/
