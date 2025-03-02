@@ -71,9 +71,9 @@ int d3d11Init(HWND hWindow, D3D11Data* d3d11)
             DXGI_ADAPTER_DESC adapterDesc;
             dxgiAdapter->GetDesc(&adapterDesc);
 
-            OutputDebugStringA("Graphics Device: ");
-            OutputDebugStringW(adapterDesc.Description);
-            OutputDebugStringA("\n");
+            // OutputDebugStringA("Graphics Device: ");
+            // OutputDebugStringW(adapterDesc.Description);
+            // OutputDebugStringA("\n");
 
             hResult = dxgiAdapter->GetParent(__uuidof(IDXGIFactory2), (void**)&dxgiFactory);
             assert(SUCCEEDED(hResult));
@@ -229,7 +229,7 @@ ID3D11PixelShader* d3d11CreatePixelShader(ID3D11Device1* device, LPCWSTR fileNam
     return pixelShader;
 }
 
-Mesh d3d11CreateMesh(ID3D11Device1* device, const LoadedObj &obj)
+Mesh d3d11CreateMesh(ID3D11Device1* device, const StaticMeshData &obj)
 {
     Mesh mesh;
 
@@ -239,11 +239,11 @@ Mesh d3d11CreateMesh(ID3D11Device1* device, const LoadedObj &obj)
     mesh.numIndices = obj.numIndices;
 
     D3D11_BUFFER_DESC vertexBufferDesc = {};
-    vertexBufferDesc.ByteWidth = obj.numVertices * sizeof(VertexData);
+    vertexBufferDesc.ByteWidth = obj.numVertices * mesh.stride;
     vertexBufferDesc.Usage     = D3D11_USAGE_IMMUTABLE;
     vertexBufferDesc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
 
-    D3D11_SUBRESOURCE_DATA vertexSubresourceData = { obj.vertexBuffer };
+    D3D11_SUBRESOURCE_DATA vertexSubresourceData = { obj.vertices };
 
     HRESULT hResult = device->CreateBuffer(&vertexBufferDesc, &vertexSubresourceData, &mesh.vertexBuffer);
     assert(SUCCEEDED(hResult));
@@ -253,7 +253,7 @@ Mesh d3d11CreateMesh(ID3D11Device1* device, const LoadedObj &obj)
     indexBufferDesc.Usage     = D3D11_USAGE_IMMUTABLE;
     indexBufferDesc.BindFlags = D3D11_BIND_INDEX_BUFFER;
 
-    D3D11_SUBRESOURCE_DATA indexSubresourceData = { obj.indexBuffer };
+    D3D11_SUBRESOURCE_DATA indexSubresourceData = { obj.indices };
 
     hResult = device->CreateBuffer(&indexBufferDesc, &indexSubresourceData, &mesh.indexBuffer);
     assert(SUCCEEDED(hResult));
@@ -261,6 +261,44 @@ Mesh d3d11CreateMesh(ID3D11Device1* device, const LoadedObj &obj)
     return mesh;
 }
 
+//TODO code duplication
+Mesh d3d11CreateAnimatedMesh(ID3D11Device1* device, const AnimatedMeshData &obj)
+{
+    Mesh mesh;
+
+    mesh.stride = sizeof(AnimatedVertexData);
+    mesh.numVertices = obj.numVertices;
+    mesh.offset = 0;
+    mesh.numIndices = obj.numIndices;
+
+    D3D11_BUFFER_DESC vertexBufferDesc = {};
+    vertexBufferDesc.ByteWidth = obj.numVertices * mesh.stride;
+    vertexBufferDesc.Usage     = D3D11_USAGE_IMMUTABLE;
+    vertexBufferDesc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+
+    D3D11_SUBRESOURCE_DATA vertexSubresourceData = { obj.vertices };
+
+    HRESULT hResult = device->CreateBuffer(&vertexBufferDesc, &vertexSubresourceData, &mesh.vertexBuffer);
+    assert(SUCCEEDED(hResult));
+
+    D3D11_BUFFER_DESC indexBufferDesc = {};
+    indexBufferDesc.ByteWidth = obj.numIndices * sizeof(uint16_t);
+    indexBufferDesc.Usage     = D3D11_USAGE_IMMUTABLE;
+    indexBufferDesc.BindFlags = D3D11_BIND_INDEX_BUFFER;
+
+    D3D11_SUBRESOURCE_DATA indexSubresourceData = { obj.indices };
+
+    hResult = device->CreateBuffer(&indexBufferDesc, &indexSubresourceData, &mesh.indexBuffer);
+    assert(SUCCEEDED(hResult));
+
+    return mesh;
+}
+
+void freeAnimatedMesh(AnimatedMeshData mesh)
+{
+    free(mesh.vertices);
+    free(mesh.indices);
+}
 Texture d3d11CreateTexture(ID3D11Device1* device, ID3D11DeviceContext1* deviceContext, const char* fileName)
 {
     int texForceNumChannels = 4;

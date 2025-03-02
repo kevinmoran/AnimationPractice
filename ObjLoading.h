@@ -24,13 +24,13 @@ struct VertexData
 };
 #pragma pack(pop)
 
-struct LoadedObj
+struct StaticMeshData
 {
     uint32_t numVertices;
     uint32_t numIndices;
 
-    VertexData* vertexBuffer;
-    uint16_t* indexBuffer;
+    VertexData* vertices;
+    uint16_t* indices;
 };
 
 // Returns a vertex and index buffer loaded from .obj file 'filename'.
@@ -39,9 +39,9 @@ struct LoadedObj
 // Allocates buffers using malloc().
 //
 // Usage:
-// LoadedObj myObj = loadObj("test.obj");
+// StaticMeshData myObj = loadObj("test.obj");
 // ... // Send myObj.vertexBuffer to GPU
 // ... // Send myObj.indexBuffer to GPU
-// freeLoadedObj(myObj);
-LoadedObj loadObj(const char* filename);
-void freeLoadedObj(LoadedObj loadedObj);
+// freeStaticMesh(myObj);
+StaticMeshData loadObj(const char* filename);
+void freeStaticMesh(StaticMeshData loadedObj);

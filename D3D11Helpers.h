@@ -1,6 +1,8 @@
 #pragma once
 
 #include <d3d11_1.h>
+#include <stdint.h>
+#include "3DMaths.h"
 
 struct D3D11Data {
     ID3D11Device1* device;
@@ -31,8 +33,30 @@ struct Mesh
     UINT offset;
 };
 
-struct LoadedObj;
-Mesh d3d11CreateMesh(ID3D11Device1* device, const LoadedObj &obj);
+#pragma pack(push, 1)
+struct AnimatedVertexData
+{
+    vec3 pos;
+    vec2 uv;
+    vec3 norm;
+    uint8_t boneIds[4];
+    vec4 boneWeights;
+};
+#pragma pack(pop)
+
+struct AnimatedMeshData
+{
+    uint32_t numVertices;
+    uint32_t numIndices;
+
+    AnimatedVertexData* vertices;
+    uint16_t* indices;
+};
+
+struct StaticMeshData;
+Mesh d3d11CreateMesh(ID3D11Device1* device, const StaticMeshData &obj);
+Mesh d3d11CreateAnimatedMesh(ID3D11Device1* device, const AnimatedMeshData &obj);
+void freeAnimatedMesh(AnimatedMeshData mesh);
 
 struct Texture
 {

@@ -27,11 +27,82 @@
 
 #define WINDOW_TITLE L"D3D11"
 
+struct Joint {
+    char name[32];
+    int parentIndex;
+};
+
+struct Skeleton {
+    char name[32];
+    int numJoints;
+    Joint* joints;
+    mat4* invBindPoseMats;
+};
+
+struct KeyframeData {
+    float* translationTimes;
+    vec3* translationValues;
+    int numTranslationKeys;
+
+    float* rotationTimes;
+    vec4* rotationValues;
+    int numRotationKeys;
+
+    float* scaleTimes;
+    vec3* scaleValues;
+    int numScaleKeys;
+};
+
+struct Animation {
+    char name[64];
+    // Skeleton reference? TODO
+    float duration;
+    KeyframeData* data; // per joint 
+};
+
 // Struct to pass data from WndProc to main loop
 struct WndProcData {
     bool windowDidResize;
     KeyState keys[KEY_COUNT];
 };
+
+void animate(Skeleton skel, Animation anim, float t, mat4** poseMats)
+{
+    assert(t >= 0);
+    assert(t <= anim.duration);
+    (*poseMats)[0] = scaleMat(1); // TODO is this a bad idea lol
+
+    for(int i = 0; i <skel.numJoints; ++i)
+    {
+        KeyframeData* keys = &(anim.data[i]);
+        vec3 transLerped;
+        {
+            int transKeyIndex = 0;
+            while(keys->translationTimes[transKeyIndex] > t
+                && transKeyIndex < keys->numTranslationKeys)
+                ++transKeyIndex;
+            
+            float timeFrom = keys->translationTimes[transKeyIndex];
+            float timeTo = keys->translationTimes[transKeyIndex+1];
+            float transT = (t - timeFrom) / (timeTo - timeFrom);
+
+            vec3 transFrom = keys->translationValues[transKeyIndex];
+            vec3 transTo = keys->translationValues[transKeyIndex+1];
+            transLerped = lerp(transFrom, transTo, transT);
+        }
+        // todo rotation
+
+        mat4 localPoseMat = translationMat(transLerped);
+        // Joint* currJoint = &(skel.joints[i]);
+        // Joint* parentJoint = &(skel.joints[currJoint->parentIndex]);
+        mat4 currIBPMat = skel.invBindPoseMats[i];
+
+        // if(i==0) TODO we're hoping initialising first poseMat to identity Just Works!
+            // parentAnimation // root doesn't have a parent
+
+        (*poseMats)[i] = localPoseMat; // TODO multiply by parent/IBP I think?
+    }
+}
 
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 {
@@ -238,9 +309,9 @@ int WINAPI WinMain(HINSTANCE /*hInstance*/, HINSTANCE /*hPrevInstance*/, LPSTR /
     // Create Pixel Shader
     ID3D11PixelShader* pixelShader = d3d11CreatePixelShader(d3d11Data.device, L"shaders.hlsl", "ps_main");
 
-    LoadedObj cubeObj = loadObj("data/cube.obj");
-    LoadedObj sphereObj = loadObj("data/sphere.obj");
-    LoadedObj cylinderObj = loadObj("data/cylinder.obj");
+    StaticMeshData cubeObj = loadObj("data/cube.obj");
+    StaticMeshData sphereObj = loadObj("data/sphere.obj");
+    StaticMeshData cylinderObj = loadObj("data/cylinder.obj");
 
     Mesh cubeMesh = d3d11CreateMesh(d3d11Data.device, cubeObj);
     Mesh sphereMesh = d3d11CreateMesh(d3d11Data.device, sphereObj);
@@ -248,21 +319,26 @@ int WINAPI WinMain(HINSTANCE /*hInstance*/, HINSTANCE /*hPrevInstance*/, LPSTR /
     
     ColliderPolyhedron cubeColliderData = createColliderPolyhedron(cubeObj);
 
-    const char* gltfPath = "data/cube.glb";
+    const char* gltfPath = "data/guy.glb";
     cgltf_options gltfOptions = {};
     cgltf_data* gltfData = NULL;
     cgltf_result gltfParseResult = cgltf_parse_file(&gltfOptions, gltfPath, &gltfData);
     cgltf_result gltfLoadResult = cgltf_load_buffers(&gltfOptions, gltfData,gltfPath);
 
-    int gltfNumIndices = 0;
-    uint16_t* gltfIndices = NULL;
+    AnimatedMeshData gltfObj = {};
+    Mesh animatedMesh = {};
+    Skeleton skeleton = {};
+    Animation* animations = NULL;
 
+    // Load everything from the gltf file
     if (gltfParseResult == cgltf_result_success)
     {
         assert(gltfLoadResult == cgltf_result_success);
-        for(size_t i=0; i<gltfData->meshes_count; ++i)
+        assert(gltfData->meshes_count == 1);
+        // Load the mesh data (vertices, indices)
+        for(size_t meshIdx=0; meshIdx<gltfData->meshes_count; ++meshIdx)
         {
-            cgltf_mesh* mesh = &gltfData->meshes[i];
+            cgltf_mesh* mesh = &gltfData->meshes[meshIdx];
 
             assert(mesh->primitives_count == 1);
 
@@ -277,12 +353,17 @@ int WINAPI WinMain(HINSTANCE /*hInstance*/, HINSTANCE /*hPrevInstance*/, LPSTR /
                 assert(indicesAccessor->stride == 2);
                 assert(indicesAccessor->is_sparse == 0);
 
-                gltfNumIndices = indicesAccessor->count;
+                int numIndices = indicesAccessor->count;
                 cgltf_buffer_view* bufferView = indicesAccessor->buffer_view;
                 assert(bufferView->size == indicesAccessor->count*indicesAccessor->stride);
 
                 cgltf_buffer* buffer = bufferView->buffer;
-                gltfIndices = (uint16_t*)(((uint8_t*)buffer->data)+bufferView->offset);
+                uint16_t* indices = (uint16_t*)(((uint8_t*)buffer->data)+bufferView->offset);
+
+                // Copy to StaticMeshData
+                gltfObj.numIndices = numIndices;
+                gltfObj.indices = (uint16_t*)malloc(numIndices * sizeof(uint16_t));
+                CopyMemory(gltfObj.indices, indices, gltfObj.numIndices*sizeof(uint16_t));
             }
             { //Find the vertices
                 int numPositions = 0;
@@ -291,6 +372,10 @@ int WINAPI WinMain(HINSTANCE /*hInstance*/, HINSTANCE /*hPrevInstance*/, LPSTR /
                 vec3* normals = NULL;
                 int numTexCoords = 0;
                 vec2* texCoords = NULL;
+                int numJoints = 0;
+                uint16_t* joints = NULL;
+                int numWeights = 0;
+                vec4* weights = NULL;
                 for(size_t attributeIndex = 0; attributeIndex<prim->attributes_count; ++attributeIndex)
                 {
                     cgltf_attribute* a = &prim->attributes[attributeIndex];
@@ -351,8 +436,42 @@ int WINAPI WinMain(HINSTANCE /*hInstance*/, HINSTANCE /*hPrevInstance*/, LPSTR /
 
                             break;
                         }
+                        case cgltf_attribute_type_joints: {
+                            assert(acc->component_type == cgltf_component_type_r_16u);
+                            assert(acc->type == cgltf_type_vec4);
+                            assert(acc->offset == 0);
+                            assert(acc->stride == 8);
+                            assert(acc->normalized == 0);
+                            assert(acc->is_sparse == 0);
+
+                            numJoints = acc->count;
+
+                            cgltf_buffer_view* bufferView = acc->buffer_view;
+                            assert(bufferView->size == acc->count*acc->stride);
+                            
+                            cgltf_buffer* buffer = bufferView->buffer;
+                            joints = (uint16_t*)(((uint8_t*)buffer->data)+bufferView->offset);
+                            break;
+                        }
+                        case cgltf_attribute_type_weights: {
+                            assert(acc->component_type == cgltf_component_type_r_32f);
+                            assert(acc->type == cgltf_type_vec4);
+                            assert(acc->offset == 0);
+                            assert(acc->stride == 16);
+                            assert(acc->normalized == 0);
+                            assert(acc->is_sparse == 0);
+
+                            numWeights = acc->count;
+
+                            cgltf_buffer_view* bufferView = acc->buffer_view;
+                            assert(bufferView->size == acc->count*acc->stride);
+                            
+                            cgltf_buffer* buffer = bufferView->buffer;
+                            weights = (vec4*)(((uint8_t*)buffer->data)+bufferView->offset);
+                            break;
+                        }
                         default: {
-                            assert(!(bool)"Unexpected attribute type");
+                            // assert(!(bool)"Unexpected attribute type");
                         }
                     }
                 }
@@ -360,19 +479,165 @@ int WINAPI WinMain(HINSTANCE /*hInstance*/, HINSTANCE /*hPrevInstance*/, LPSTR /
                 assert(numPositions == numNormals);
                 assert(numTexCoords == numNormals);
                 // Copy attributes into one interleaved buffer
+                gltfObj.numVertices = numPositions;
+                gltfObj.vertices = (AnimatedVertexData*)malloc(numPositions * sizeof(AnimatedVertexData));
+                for(int vIdx = 0; vIdx < numPositions; ++vIdx)
+                {
+                    gltfObj.vertices[vIdx] = {positions[vIdx], texCoords[vIdx], normals[vIdx],{},weights[vIdx]}; 
+                    gltfObj.vertices[vIdx].boneIds[0] = (uint8_t)joints[4*vIdx+0]; 
+                    gltfObj.vertices[vIdx].boneIds[1] = (uint8_t)joints[4*vIdx+1]; 
+                    gltfObj.vertices[vIdx].boneIds[2] = (uint8_t)joints[4*vIdx+2]; 
+                    gltfObj.vertices[vIdx].boneIds[3] = (uint8_t)joints[4*vIdx+3];
+                }
             }
 
             printf("Found a mesh: %s\n", mesh->name);
         }
+
+        // Load the skeleton
+        assert(gltfData->skins_count == 1);
+        cgltf_skin* skin = &gltfData->skins[0];
+        
+        printf("Found a skin: %s\n", skin->name);
+        skeleton.numJoints = skin->joints_count;
+        skeleton.joints = (Joint*)calloc(skeleton.numJoints, sizeof(Joint));
+        strcpy_s(skeleton.name, sizeof(skeleton.name), skin->name);
+
+        skeleton.invBindPoseMats = (mat4*)calloc(skeleton.numJoints, sizeof(mat4));
+        { // Find the ibp mats from the gltf sludge
+            assert(skin->inverse_bind_matrices->component_type == cgltf_component_type_r_32f);
+            assert(skin->inverse_bind_matrices->type == cgltf_type_mat4);
+            assert(skin->inverse_bind_matrices->offset == 0);
+            assert(skin->inverse_bind_matrices->stride == 64);
+            cgltf_buffer_view* ibpMatsBuffView = skin->inverse_bind_matrices->buffer_view;
+            cgltf_buffer* ibpMatsBuff = ibpMatsBuffView->buffer;
+            mat4* ibpMats = (mat4*)(((uint8_t*)ibpMatsBuff->data)+ibpMatsBuffView->offset);
+            memcpy_s(skeleton.invBindPoseMats, skeleton.numJoints*sizeof(mat4), ibpMats, skeleton.numJoints*sizeof(mat4));
+        }
+
+        for(size_t i=0; i<skin->joints_count; ++i)
+        {
+            cgltf_node* node = skin->joints[i];
+            Joint* targetJoint = &skeleton.joints[i];
+            strcpy_s(targetJoint->name, sizeof(targetJoint->name), node->name);
+
+            for(size_t j=0; j<i; ++j) {
+                if(strcmp(skin->joints[j]->name, node->parent->name) == 0)
+                    targetJoint->parentIndex = j;
+            }
+
+            printf("%u - %s (Parent: %d. %s)\n", i, node->name, targetJoint->parentIndex, node->parent->name);
+            // mat4* ibpMats = skeleton.invBindPoseMats;
+            // printf("%.2f,%.2f,%.2f,%.2f,\n%.2f,%.2f,%.2f,%.2f,\n%.2f,%.2f,%.2f,%.2f,\n%.2f,%.2f,%.2f,%.2f,\n",
+            //         ibpMats[i].m[0][0], ibpMats[i].m[1][0], ibpMats[i].m[2][0], ibpMats[i].m[3][0],
+            //         ibpMats[i].m[0][1], ibpMats[i].m[1][1], ibpMats[i].m[2][1], ibpMats[i].m[3][1],
+            //         ibpMats[i].m[0][2], ibpMats[i].m[1][2], ibpMats[i].m[2][2], ibpMats[i].m[3][2],
+            //         ibpMats[i].m[0][3], ibpMats[i].m[1][3], ibpMats[i].m[2][3], ibpMats[i].m[3][3]);
+        }
+        fflush(stdout);
+
+        // Find the animations! 
+        animations = (Animation*)calloc(gltfData->animations_count, sizeof(Animation));
+        printf("Found %u animations\n", gltfData->animations_count);
+
+        for(size_t i=0; i<gltfData->animations_count; ++i)
+        {
+            animations[i].data = (KeyframeData*)calloc(skeleton.numJoints, sizeof(KeyframeData));
+            cgltf_animation* gltfAnimation = &(gltfData->animations[i]);
+            strcpy_s(animations[i].name, sizeof(animations[i].name), gltfAnimation->name);
+            printf("%s\n", gltfAnimation->name);
+
+            for(size_t j=0; j<gltfAnimation->channels_count; ++j)
+            {
+                cgltf_animation_channel* channel = &(gltfAnimation->channels[j]);
+                int jointIndex = -1;
+                for(int k=0; k<skeleton.numJoints; ++k){
+                    if(strcmp(skeleton.joints[k].name, channel->target_node->name) == 0) {
+                        jointIndex = k; 
+                        break;
+                    }
+                }
+                assert(jointIndex >= 0);
+
+                cgltf_animation_sampler* sampler = channel->sampler;
+
+                assert(sampler->interpolation == cgltf_interpolation_type_linear);
+
+                assert(sampler->input->component_type == cgltf_component_type_r_32f);
+                assert(sampler->input->normalized == 0);
+                assert(sampler->input->type == cgltf_type_scalar);
+                assert(sampler->input->offset == 0);
+                assert(sampler->input->stride == 4);
+
+                assert(sampler->output->component_type == cgltf_component_type_r_32f);
+                assert(sampler->output->normalized == 0);
+                assert(sampler->output->offset == 0);
+                assert(sampler->output->stride == 4 * (cgltf_size)(sampler->output->type));
+                assert(sampler->input->count == sampler->output->count);
+
+                int numKeys = sampler->input->count;
+                int numOutKeys = sampler->output->count;
+
+                float* timestamps = (float*)(((uint8_t*)sampler->input->buffer_view->buffer->data) + sampler->input->buffer_view->offset);
+                assert(timestamps[0] == 0);
+                float duration = timestamps[numKeys-1];
+                if(duration > animations[i].duration)
+                    animations[i].duration = duration;
+                    
+                uint8_t* keyValues = ((uint8_t*)sampler->output->buffer_view->buffer->data) + sampler->output->buffer_view->offset;
+
+                KeyframeData* currentKeyFrameData = &animations[i].data[jointIndex];
+
+                int timeKeysSize = numKeys*sizeof(float);
+
+                switch(channel->target_path)
+                {
+                    case cgltf_animation_path_type_translation: {
+                        assert(sampler->output->type == cgltf_type_vec3);
+                        vec3* translationValues = (vec3*)keyValues;
+
+                        int valuesSize = numOutKeys*sizeof(vec3);
+                        
+                        currentKeyFrameData->translationTimes = (float*)malloc(timeKeysSize);
+                        currentKeyFrameData->translationValues = (vec3*)malloc(valuesSize);
+
+                        memcpy_s(currentKeyFrameData->translationTimes, timeKeysSize, timestamps, timeKeysSize);
+                        memcpy_s(currentKeyFrameData->translationValues, valuesSize, translationValues, valuesSize);
+                        currentKeyFrameData->numTranslationKeys = numKeys;
+                        break;
+                    }
+                    case cgltf_animation_path_type_rotation: {
+                        assert(sampler->output->type == cgltf_type_vec4);
+                        vec4* rotationValues = (vec4*)keyValues;
+                        
+                        int valuesSize = numOutKeys*sizeof(vec4);
+                        
+                        currentKeyFrameData->rotationTimes = (float*)malloc(timeKeysSize);
+                        currentKeyFrameData->rotationValues = (vec4*)malloc(valuesSize);
+
+                        memcpy_s(currentKeyFrameData->rotationTimes, timeKeysSize, timestamps, timeKeysSize);
+                        memcpy_s(currentKeyFrameData->rotationValues, valuesSize, rotationValues, valuesSize);
+                        currentKeyFrameData->numRotationKeys = numKeys;
+                        break;
+                    }
+                    case cgltf_animation_path_type_scale: {
+                        assert(sampler->output->type == cgltf_type_vec3);
+                        break;
+                    }
+                    default: assert(0);
+                }
+
+            }
+        }
+        animatedMesh = d3d11CreateAnimatedMesh(d3d11Data.device, gltfObj);
+
         cgltf_free(gltfData);
     }
 
-    assert(gltfIndices);
-    assert(gltfNumIndices);
-    
-    freeLoadedObj(cubeObj);
-    freeLoadedObj(sphereObj);
-    freeLoadedObj(cylinderObj);
+    freeAnimatedMesh(gltfObj);
+    freeStaticMesh(cubeObj);
+    freeStaticMesh(sphereObj);
+    freeStaticMesh(cylinderObj);
 
     Texture cubeTexture = d3d11CreateTexture(d3d11Data.device, d3d11Data.deviceContext, "data/test.png");
 
@@ -464,6 +729,17 @@ int WINAPI WinMain(HINSTANCE /*hInstance*/, HINSTANCE /*hPrevInstance*/, LPSTR /
         cubeColliderDatas[i].normalMatrix = transpose(invModelMat);
     }
 
+    const int NUM_GLTFS = 3;
+    vec3 gltfPositions[NUM_GLTFS] = {
+        {10,0,-20},
+        {-10,0,-20},
+        {3,0,-20}
+    };
+    mat4 gltfModelMats[NUM_GLTFS];
+    for(int i=0; i<NUM_GLTFS; ++i) {
+        gltfModelMats[i] = scaleMat(2) * translationMat(gltfPositions[i]);
+    }
+
     const int NUM_SPHERES = 4;
     vec3 spherePositions[NUM_SPHERES] = {
         {-4,0,0},
@@ -486,6 +762,30 @@ int WINAPI WinMain(HINSTANCE /*hInstance*/, HINSTANCE /*hPrevInstance*/, LPSTR /
     }
         
     float timeStepMultiplier = 1.f;
+
+    // Simple skeleton arm test
+    const int NUM_SKEL_BONES = 3;
+    mat4 skelBindPoseMats[NUM_SKEL_BONES] = {
+        translationMat({0,0,0}),
+        translationMat({0,1,0}), // Note, these are relative to parent
+        translationMat({0,1,0}) // so this bone is actually 2 units above root
+    };
+    mat4 skelInvBindPoseMats[NUM_SKEL_BONES] =
+    {
+        // note: because we're using a cube at the origin as the model 
+        // for each bone, they're effectively already in local space
+        // so invBindPose is identity for now
+        scaleMat(1), scaleMat(1), scaleMat(1)
+    };
+    vec3 skelTranslations[NUM_SKEL_BONES] = 
+    {
+        {-3,0,-3}
+    };
+    vec2 skelRotations[NUM_SKEL_BONES] =
+    {
+        // {0, 0}
+        {-PI32/6, PI32/4},
+    };
 
     // Main Loop
     bool isRunning = true;
@@ -512,9 +812,7 @@ int WINAPI WinMain(HINSTANCE /*hInstance*/, HINSTANCE /*hPrevInstance*/, LPSTR /
                 TranslateMessage(&msg);
                 DispatchMessageW(&msg);
             }
-        }
-
-        if(wndProcData.keys[KEY_ESC].isDown)
+            if(wndProcData.keys[KEY_ESC].isDown)
             break;
 
         if(wndProcData.windowDidResize)
@@ -554,6 +852,7 @@ int WINAPI WinMain(HINSTANCE /*hInstance*/, HINSTANCE /*hPrevInstance*/, LPSTR /
             timeStepMultiplier = CLAMP_ABOVE(timeStepMultiplier*0.5f, 0.25f);
         if(wndProcData.keys[KEY_PLUS].wentDown())
             timeStepMultiplier = CLAMP_BELOW(timeStepMultiplier*2.f, 2.f);
+        }
 
         if(!freeCam) {
             playerUpdate(&player, wndProcData.keys, camera.fwd, dt*timeStepMultiplier);
@@ -579,6 +878,11 @@ int WINAPI WinMain(HINSTANCE /*hInstance*/, HINSTANCE /*hPrevInstance*/, LPSTR /
             if(result.isColliding) {
                 cubeTintColours[i] = {0.1f, 0.8f, 0.2f, 1.f};
                 player.pos += result.normal * result.penetrationDistance;
+                if (fabsf(dot(result.normal, vec3{0,1,0})) < 0.1f)
+                {
+                    player.vel.y = 0;
+                    player.isOnGround = true;
+                }
             }
             else {
                 cubeTintColours[i] = {1,1,1,1};
@@ -606,30 +910,32 @@ int WINAPI WinMain(HINSTANCE /*hInstance*/, HINSTANCE /*hPrevInstance*/, LPSTR /
 
         mat4 viewPerspectiveMat = viewMat * perspectiveMat;
 
-        FLOAT backgroundColor[4] = { 0.1f, 0.2f, 0.6f, 1.0f };
-        d3d11Data.deviceContext->ClearRenderTargetView(d3d11Data.msaaRenderTargetView, backgroundColor);
-        
-        d3d11Data.deviceContext->ClearDepthStencilView(d3d11Data.depthStencilView, D3D11_CLEAR_DEPTH, 1.0f, 0);
+        { // set up draw state guff
+            FLOAT backgroundColor[4] = { 0.1f, 0.2f, 0.6f, 1.0f };
+            d3d11Data.deviceContext->ClearRenderTargetView(d3d11Data.msaaRenderTargetView, backgroundColor);
+            
+            d3d11Data.deviceContext->ClearDepthStencilView(d3d11Data.depthStencilView, D3D11_CLEAR_DEPTH, 1.0f, 0);
 
-        D3D11_VIEWPORT viewport = { 0.0f, 0.0f, (FLOAT)windowWidth, (FLOAT)windowHeight, 0.0f, 1.0f };
-        d3d11Data.deviceContext->RSSetViewports(1, &viewport);
+            D3D11_VIEWPORT viewport = { 0.0f, 0.0f, (FLOAT)windowWidth, (FLOAT)windowHeight, 0.0f, 1.0f };
+            d3d11Data.deviceContext->RSSetViewports(1, &viewport);
 
-        d3d11Data.deviceContext->RSSetState(rasterizerState);
-        d3d11Data.deviceContext->OMSetDepthStencilState(depthStencilState, 0);
+            d3d11Data.deviceContext->RSSetState(rasterizerState);
+            d3d11Data.deviceContext->OMSetDepthStencilState(depthStencilState, 0);
 
-        d3d11Data.deviceContext->OMSetRenderTargets(1, &d3d11Data.msaaRenderTargetView, d3d11Data.depthStencilView);
+            d3d11Data.deviceContext->OMSetRenderTargets(1, &d3d11Data.msaaRenderTargetView, d3d11Data.depthStencilView);
 
-        d3d11Data.deviceContext->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        d3d11Data.deviceContext->IASetInputLayout(inputLayout);
+            d3d11Data.deviceContext->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            d3d11Data.deviceContext->IASetInputLayout(inputLayout);
 
-        d3d11Data.deviceContext->VSSetShader(vertexShader, nullptr, 0);
-        d3d11Data.deviceContext->PSSetShader(pixelShader, nullptr, 0);
+            d3d11Data.deviceContext->VSSetShader(vertexShader, nullptr, 0);
+            d3d11Data.deviceContext->PSSetShader(pixelShader, nullptr, 0);
 
-        d3d11Data.deviceContext->VSSetConstantBuffers(0, 1, &perObjectVSConstantBuffer);
-        d3d11Data.deviceContext->PSSetConstantBuffers(0, 1, &perObjectPSConstantBuffer);
+            d3d11Data.deviceContext->VSSetConstantBuffers(0, 1, &perObjectVSConstantBuffer);
+            d3d11Data.deviceContext->PSSetConstantBuffers(0, 1, &perObjectPSConstantBuffer);
 
-        d3d11Data.deviceContext->PSSetShaderResources(0, 1, &cubeTexture.d3dShaderResourceView);
-        d3d11Data.deviceContext->PSSetSamplers(0, 1, &samplerState);
+            d3d11Data.deviceContext->PSSetShaderResources(0, 1, &cubeTexture.d3dShaderResourceView);
+            d3d11Data.deviceContext->PSSetSamplers(0, 1, &samplerState);
+        }
 
         { // Draw player capsule collider (just draw 2 spheres and a cylinder between them)
 
@@ -685,6 +991,65 @@ int WINAPI WinMain(HINSTANCE /*hInstance*/, HINSTANCE /*hPrevInstance*/, LPSTR /
             }
         }
 
+        { // Draw test skeleton
+            d3d11Data.deviceContext->IASetVertexBuffers(0, 1, &cubeMesh.vertexBuffer, &cubeMesh.stride, &cubeMesh.offset);
+            d3d11Data.deviceContext->IASetIndexBuffer(cubeMesh.indexBuffer, DXGI_FORMAT_R16_UINT, 0);
+            
+            mat4 skelModelMats[NUM_SKEL_BONES] = 
+            {
+                scaleMat(1) // init root bone so when we grab parent matrix it's valid
+            };
+
+            skelRotations[0].y = sinf(0.5f*PI32*(float)currentTimeInSeconds);
+            skelRotations[1].x = sinf(0.3f*PI32*(float)currentTimeInSeconds);
+            skelRotations[2].y = sinf(0.8f*PI32*(float)currentTimeInSeconds);
+
+            for(int i=0; i<NUM_SKEL_BONES; ++i)
+            {
+                int parentIndex = CLAMP_ABOVE(i-1,0);
+                mat4 parentMat = skelModelMats[parentIndex];
+                
+                mat4 localMat = rotateXMat(skelRotations[i].x) * rotateYMat(skelRotations[i].y) * translationMat(skelTranslations[i]);
+
+                skelModelMats[i] = skelInvBindPoseMats[i] * localMat * skelBindPoseMats[i] * parentMat;
+
+                PerObjectVSConstants vsConstants = { skelModelMats[i] * viewPerspectiveMat};
+                d3d11OverwriteConstantBuffer(d3d11Data.deviceContext, perObjectVSConstantBuffer, &vsConstants, sizeof(PerObjectVSConstants));
+            
+                PerObjectPSConstants psConstants = { 0.8,0,0.8,1 };
+                d3d11OverwriteConstantBuffer(d3d11Data.deviceContext, perObjectPSConstantBuffer, &psConstants, sizeof(PerObjectPSConstants));
+
+                d3d11Data.deviceContext->DrawIndexed(cubeMesh.numIndices, 0, 0);
+            }
+        }
+    
+#if 01
+        { // Draw animated mesh
+
+            static float animationTimer = 0;
+            // animationTimer += dt; // todo timer looping
+
+            mat4* poseMats = (mat4*)malloc(skeleton.numJoints * sizeof(mat4));
+            animate(skeleton, animations[0], animationTimer, &poseMats);
+
+            // todo send posemats to gpu somehow
+            // todo write skinning shaderc
+            // donezo
+
+            d3d11Data.deviceContext->IASetVertexBuffers(0, 1, &animatedMesh.vertexBuffer, &animatedMesh.stride, &animatedMesh.offset);
+            d3d11Data.deviceContext->IASetIndexBuffer(animatedMesh.indexBuffer, DXGI_FORMAT_R16_UINT, 0);
+            
+            for(int i=0; i<NUM_GLTFS; ++i) {
+                PerObjectVSConstants vsConstants = { gltfModelMats[i] * viewPerspectiveMat};
+                d3d11OverwriteConstantBuffer(d3d11Data.deviceContext, perObjectVSConstantBuffer, &vsConstants, sizeof(PerObjectVSConstants));
+            
+                PerObjectPSConstants psConstants = { {1,0,0,1} };
+                d3d11OverwriteConstantBuffer(d3d11Data.deviceContext, perObjectPSConstantBuffer, &psConstants, sizeof(PerObjectPSConstants));
+
+                d3d11Data.deviceContext->DrawIndexed(animatedMesh.numIndices, 0, 0);
+            }
+        }
+
         { // Draw spheres
             d3d11Data.deviceContext->IASetVertexBuffers(0, 1, &sphereMesh.vertexBuffer, &sphereMesh.stride, &sphereMesh.offset);
             d3d11Data.deviceContext->IASetIndexBuffer(sphereMesh.indexBuffer, DXGI_FORMAT_R16_UINT, 0);
@@ -701,36 +1066,38 @@ int WINAPI WinMain(HINSTANCE /*hInstance*/, HINSTANCE /*hPrevInstance*/, LPSTR /
                 d3d11Data.deviceContext->DrawIndexed(sphereMesh.numIndices, 0, 0);
             }
         }
-
+#endif
         d3d11Data.deviceContext->ResolveSubresource(d3d11Data.mainRenderTarget, 0, d3d11Data.msaaRenderTarget, 0, DXGI_FORMAT_B8G8R8A8_UNORM_SRGB);
 
         d3d11Data.swapChain->Present(1, 0);
     }
 
-    depthStencilState->Release();
-    rasterizerState->Release();
-    perObjectPSConstantBuffer->Release();
-    perObjectVSConstantBuffer->Release();
-    whiteTexture.d3dShaderResourceView->Release();
-    cubeTexture.d3dShaderResourceView->Release();
-    samplerState->Release();
-    cylinderMesh.indexBuffer->Release();
-    cylinderMesh.vertexBuffer->Release();
-    sphereMesh.indexBuffer->Release();
-    sphereMesh.vertexBuffer->Release();
-    cubeMesh.indexBuffer->Release();
-    cubeMesh.vertexBuffer->Release();
-    pixelShader->Release();
-    inputLayout->Release();
-    vertexShader->Release();
-    d3d11Data.depthStencilView->Release();
-    d3d11Data.msaaRenderTarget->Release();
-    d3d11Data.msaaRenderTargetView->Release();
-    d3d11Data.mainRenderTarget->Release();
-    d3d11Data.mainRenderTargetView->Release();
-    d3d11Data.swapChain->Release();
-    d3d11Data.deviceContext->Release();
-    d3d11Data.device->Release();
+    { // Release all d3d11 stuff
+        depthStencilState->Release();
+        rasterizerState->Release();
+        perObjectPSConstantBuffer->Release();
+        perObjectVSConstantBuffer->Release();
+        whiteTexture.d3dShaderResourceView->Release();
+        cubeTexture.d3dShaderResourceView->Release();
+        samplerState->Release();
+        cylinderMesh.indexBuffer->Release();
+        cylinderMesh.vertexBuffer->Release();
+        sphereMesh.indexBuffer->Release();
+        sphereMesh.vertexBuffer->Release();
+        cubeMesh.indexBuffer->Release();
+        cubeMesh.vertexBuffer->Release();
+        pixelShader->Release();
+        inputLayout->Release();
+        vertexShader->Release();
+        d3d11Data.depthStencilView->Release();
+        d3d11Data.msaaRenderTarget->Release();
+        d3d11Data.msaaRenderTargetView->Release();
+        d3d11Data.mainRenderTarget->Release();
+        d3d11Data.mainRenderTargetView->Release();
+        d3d11Data.swapChain->Release();
+        d3d11Data.deviceContext->Release();
+        d3d11Data.device->Release();
+    }
 
     return 0;
 }

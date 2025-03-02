@@ -5,7 +5,7 @@
 
 #include "ObjLoading.h"
 
-ColliderPolyhedron createColliderPolyhedron(const LoadedObj &obj)
+ColliderPolyhedron createColliderPolyhedron(const StaticMeshData &obj)
 {
     ColliderPolyhedron result = {};
 
@@ -15,8 +15,8 @@ ColliderPolyhedron createColliderPolyhedron(const LoadedObj &obj)
     vec4* destVertex = result.vertices;
     vec3 sumOfVertices = {};
     for(u32 i=0; i<obj.numVertices; ++i) {
-        *destVertex++ = v4(obj.vertexBuffer[i].pos, 1.f);
-        sumOfVertices += obj.vertexBuffer[i].pos;
+        *destVertex++ = v4(obj.vertices[i].pos, 1.f);
+        sumOfVertices += obj.vertices[i].pos;
     }
     result.centroid = sumOfVertices / (float)obj.numVertices;
 
@@ -27,9 +27,9 @@ ColliderPolyhedron createColliderPolyhedron(const LoadedObj &obj)
 
     Plane* destPlane = result.planes;
     for(u32 i=0; i<obj.numIndices; i+=3) {
-        vec3 a = obj.vertexBuffer[obj.indexBuffer[i]].pos;
-        vec3 b = obj.vertexBuffer[obj.indexBuffer[i+1]].pos;
-        vec3 c = obj.vertexBuffer[obj.indexBuffer[i+2]].pos;
+        vec3 a = obj.vertices[obj.indices[i]].pos;
+        vec3 b = obj.vertices[obj.indices[i+1]].pos;
+        vec3 c = obj.vertices[obj.indices[i+2]].pos;
         vec3 n = normalise(cross(b-a, c-a));
 
         destPlane->point = v4(a, 1.f);
@@ -44,9 +44,9 @@ ColliderPolyhedron createColliderPolyhedron(const LoadedObj &obj)
 
     Edge* destEdge = result.edges;
     for(u32 i=0; i<obj.numIndices; i+=3) {
-        vec3 a = obj.vertexBuffer[obj.indexBuffer[i]].pos;
-        vec3 b = obj.vertexBuffer[obj.indexBuffer[i+1]].pos;
-        vec3 c = obj.vertexBuffer[obj.indexBuffer[i+2]].pos;
+        vec3 a = obj.vertices[obj.indices[i]].pos;
+        vec3 b = obj.vertices[obj.indices[i+1]].pos;
+        vec3 c = obj.vertices[obj.indices[i+2]].pos;
         
         *destEdge++ = {a, b};
         *destEdge++ = {b, c};

@@ -143,9 +143,9 @@ static void growArray(void** array, size_t* capacity, size_t itemSize)
     assert(*array);
 }
 
-LoadedObj loadObj(const char* filename)
+StaticMeshData loadObj(const char* filename)
 {
-    LoadedObj result = {};
+    StaticMeshData result = {};
 
     // Read entire file into string
     char* fileBytes;
@@ -299,16 +299,16 @@ LoadedObj loadObj(const char* filename)
 
     result.numVertices = vertexBufferSize;
     result.numIndices = indexBufferSize;
-    result.vertexBuffer = outVertexBuffer;
-    result.indexBuffer = outIndexBuffer;
+    result.vertices = outVertexBuffer;
+    result.indices = outIndexBuffer;
 
     return result;
 }
 
-void freeLoadedObj(LoadedObj loadedObj)
+void freeStaticMesh(StaticMeshData loadedObj)
 {
-    free(loadedObj.vertexBuffer);
-    free(loadedObj.indexBuffer);
+    free(loadedObj.vertices);
+    free(loadedObj.indices);
 }
 
 #pragma warning(pop)

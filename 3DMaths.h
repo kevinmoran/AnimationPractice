@@ -70,6 +70,10 @@ inline float lengthSquared(vec3 v) {
     return (v.x*v.x + v.y*v.y + v.z*v.z);
 }
 
+inline float dot(vec2 a, vec2 b) {
+    return a.x*b.x + a.y*b.y;
+}
+
 inline float dot(vec3 a, vec3 b) {
     return a.x*b.x + a.y*b.y + a.z*b.z;
 }
@@ -147,6 +151,13 @@ inline vec3 operator+ (vec3 a, vec3 b) {
 
 inline vec3 operator- (vec3 a, vec3 b) {
     return {a.x-b.x, a.y-b.y, a.z-b.z};
+}
+
+inline vec3 lerp(vec3 a, vec3 b, float t) {
+    return {
+        (1-t)*a.x + (t)*b.x,
+        (1-t)*a.y + (t)*b.y,
+        (1-t)*a.z + (t)*b.z };
 }
 
 inline mat3 scaleMat3(vec3 scale) {

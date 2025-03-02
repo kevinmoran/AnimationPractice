@@ -49,8 +49,8 @@ struct ColliderCapsule
     float radius;
 };
 
-struct LoadedObj;
-ColliderPolyhedron createColliderPolyhedron(const LoadedObj &obj);
+struct StaticMeshData;
+ColliderPolyhedron createColliderPolyhedron(const StaticMeshData &obj);
 
 struct CollisionResult
 {
